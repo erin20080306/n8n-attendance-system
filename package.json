@@ -1,0 +1,17 @@
+{
+  "name": "n8n-attendance-system",
+  "version": "2.0.0",
+  "description": "多倉出勤請假查詢與報表系統 - 支援 Vercel Serverless 部署",
+  "private": true,
+  "scripts": {
+    "start": "node sheets-proxy.js",
+    "dev": "node sheets-proxy.js"
+  },
+  "keywords": ["attendance", "google-sheets", "vercel"],
+  "author": "erin20080306",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "nodemailer": "^8.0.4"
+  }
+}

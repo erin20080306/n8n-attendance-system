@@ -1,0 +1,165 @@
+{
+  "id": "attendance-query-system",
+  "name": "多倉出勤請假查詢與報表系統",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "attendance-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook 接收查詢",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "attendance-query-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// 節點：指令解析（規則式）\n// ============================================================\nconst CONFIG = {\n  warehouses: ['TAO1','TAO3','TAO4','TAO5','TAO6','TAO7','TAO10'],\n  intentKeywords: [\n    { keywords: ['病假統計'], intent: 'sick_leave_stats' },\n    { keywords: ['請假統計'], intent: 'leave_stats' },\n    { keywords: ['請假狀況','請假'], intent: 'leave_status' },\n    { keywords: ['出勤人員','出勤明細','出勤報表'], intent: 'attendance_detail' },\n    { keywords: ['出勤統計'], intent: 'attendance_stats' },\n  ],\n  leaveTypeKeywords: [\n    { keywords: ['病假','病'], leaveType: '病假' },\n    { keywords: ['事假','事'], leaveType: '事假' },\n    { keywords: ['特休','特'], leaveType: '特休' },\n    { keywords: ['曠職','曠'], leaveType: '曠職' },\n  ],\n};\nconst query = ($input.first().json.body?.query || '').trim();\nif (!query) return [{ json: { success:false, error:'請提供查詢指令', hint:'範例：4/2請假狀況' } }];\nfunction parseDate(q) {\n  const yr = new Date().getFullYear();\n  let m = q.match(/(\\d{4})[\\/-](\\d{1,2})[\\/-](\\d{1,2})/);\n  if (m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;\n  m = q.match(/(\\d{1,2})[\\/-](\\d{1,2})/);\n  if (m) return `${yr}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;\n  return null;\n}\nfunction parseIntent(q) { for (const r of CONFIG.intentKeywords) for (const k of r.keywords) if (q.includes(k)) return r.intent; return 'attendance_detail'; }\nfunction parseWH(q) { if (/全部倉|所有倉|全倉/.test(q)) return CONFIG.warehouses.slice(); const f=[]; for (const w of CONFIG.warehouses) if (q.toUpperCase().includes(w)) f.push(w); return f.length?f:CONFIG.warehouses.slice(); }\nfunction parseLT(q) { for (const r of CONFIG.leaveTypeKeywords) for (const k of r.keywords) if (q.includes(k)) return r.leaveType; return ''; }\nconst date = parseDate(query);\nif (!date) return [{ json: { success:false, error:'無法解析日期', hint:'支援：4/2、2026/4/2', originalQuery:query } }];\nconst intent = parseIntent(query);\nreturn [{ json: { success:true, parsed: { intent, date, warehouse:parseWH(query), leaveType:parseLT(query), needReport:['sick_leave_stats','leave_stats','attendance_stats'].includes(intent) }, originalQuery:query } }];\n"
+      },
+      "id": "parse-query-node",
+      "name": "指令解析",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "chk", "leftValue": "={{ $json.success }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals", "singleValue": true } }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-parse-ok-node",
+      "name": "解析成功？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// 節點：組裝讀取參數\n// ============================================================\nconst CONFIG = {\n  spreadsheetMap: {\n    'TAO1':'1_bhGQdx0YH7lsqPFEq5___6_Nwq_gbelJmIHv0bmaIE',\n    'TAO3':'1cffI2jIVZA1uSiAyaLLXXgPzDByhy87xznaN85O7wEE',\n    'TAO4':'1tVxQbV0298fn2OXWAF0UqZa7FLbypsatciatxs4YVTU',\n    'TAO5':'1jzVXC6gt36hJtlUHoxtTzZLMNj4EtTsd4k8eNB1bdiA',\n    'TAO6':'1wwPLSLjl2abfM_OMdTNI9PoiPKo3waCV_y0wmx2DxAE',\n    'TAO7':'16nGCqRO8DYDm0PbXFbdt-fiEFZCXxXjlOWjKU67p4LY',\n    'TAO10':'1y0w49xdFlHvcVtgtG8fq6zdrF26y8j7HMFh5ujzUyR4',\n  },\n  intentSheetType: { 'leave_status':'leave','sick_leave_stats':'leave','leave_stats':'leave','attendance_detail':'work','attendance_stats':'work' },\n  sheetKeywords: { leave:['班表','出勤記錄','假況'], work:['出勤時數','出勤時間','工時'] },\n};\nconst prev = $('指令解析').first().json;\nconst p = prev.parsed;\nconst st = CONFIG.intentSheetType[p.intent]||'leave';\nconst results = [];\nfor (const wh of p.warehouse) {\n  const sid = CONFIG.spreadsheetMap[wh]; if (!sid) continue;\n  results.push({ json: { warehouse:wh, spreadsheetId:sid, sheetType:st, sheetKeywords:CONFIG.sheetKeywords[st], intent:p.intent, date:p.date, leaveType:p.leaveType, needReport:p.needReport, originalQuery:prev.originalQuery } });\n}\nreturn results;\n"
+      },
+      "id": "build-requests-node",
+      "name": "組裝讀取參數",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:3456/sheets/meta?spreadsheetId={{ $json.spreadsheetId }}",
+        "authentication": "none",
+        "options": {}
+      },
+      "id": "http-get-meta-node",
+      "name": "取得分頁列表",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// 節點：解析分頁，組裝資料 URL（月份感知）\n// ============================================================\nconst CONFIG = { sheetKeywords: { leave:['班表','出勤記錄','假況'], work:['出勤時數','出勤時間','工時'] } };\nlet prev; try { prev = $('組裝讀取參數').first().json; } catch(e) { prev = $input.first().json; }\nconst meta = $input.first().json;\nconst wh = prev.warehouse, sid = prev.spreadsheetId, st = prev.sheetType;\nconst kw = CONFIG.sheetKeywords[st]||CONFIG.sheetKeywords.leave;\nif (meta.error || !meta.sheets) {\n  return [{ json: { ...prev, allSheetNames:[], warning:`${wh} 無法取得分頁`, dataUrl:'', success:false } }];\n}\nconst names = meta.sheets.map(s=>s.properties.title);\nconst queryMonth = prev.date ? parseInt(prev.date.split('-')[1]) : 0;\nconst monthStr = queryMonth ? `${queryMonth}月` : '';\nlet target = null, warning = null;\nif (monthStr) {\n  for (const k of kw) { const f=names.find(n=>n.includes(k)&&n.includes(monthStr)); if(f){target=f;break;} }\n}\nif (!target) {\n  for (const k of kw) { const f=names.find(n=>n.includes(k)); if(f){target=f;break;} }\n}\nif (!target) { target=names[0]||'Sheet1'; warning=`${wh} 找不到含 [${kw.join(',')}] 的分頁，使用「${target}」`; }\nreturn [{ json: { ...prev, sheetName:target, allSheetNames:names, warning, dataUrl:`http://localhost:3456/sheets/data?spreadsheetId=${sid}&sheetName=${encodeURIComponent(target)}`, success:true } }];\n"
+      },
+      "id": "parse-meta-node",
+      "name": "解析分頁並組裝URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.dataUrl }}",
+        "authentication": "none",
+        "options": {}
+      },
+      "id": "http-get-data-node",
+      "name": "讀取分頁資料",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// 節點：資料標準化\n// ============================================================\nconst CONFIG = {\n  workFieldMapping: {\n    date:['日期','Date'], department:['組別','部門','Department','組','Group'],\n    shift:['班別','Shift','班次'], name:['姓名','Name','員工姓名'],\n    workHours:['工作總時數','工時','Hours','總工時'],\n    overtimeHours:['加班總時數','OvertimeHours','加班時數','加班'],\n    note:['備註','Note','Remark'], attendanceStatus:['出勤狀態','Status'],\n    leaveType:['假況','請假','LeaveType','假別'],\n  },\n  leaveStatusMapping: {\n    '病假':'病假','病':'病假','事假':'事假','事':'事假',\n    '特休':'特休','特':'特休','曠職':'曠職','曠':'曠職',\n    '出勤':'出勤','正常':'出勤','休假':'休假','休':'休假',\n    '公假':'公假','公':'公假','產假':'產假','喪假':'喪假','婚假':'婚假','例':'例假','例假':'例假','例休':'例休','未':'未到','離':'離職','離職':'離職','下休(事)':'事假','下休(特休)':'特休','下休(曠)':'曠職','病(無薪)':'病假','無薪病假':'病假',\n  },\n  leaveDateStartCol: 7,\n};\nlet prev; try { prev=$('解析分頁並組裝URL').first().json; } catch(e) { prev={}; }\nconst api = $input.first().json;\nconst wh=prev.warehouse||'', st=prev.sheetType||'work', sn=prev.sheetName||'';\nconst allSN=prev.allSheetNames||[], date=prev.date||'', intent=prev.intent||'';\nconst lt=prev.leaveType||'', nr=prev.needReport||false, oq=prev.originalQuery||'';\nconst pw=prev.warning||null;\nif (api.error||!api.values) return [{ json:{warehouse:wh,sheetType:st,sheetName:sn,allSheetNames:allSN,date,intent,leaveType:lt,needReport:nr,originalQuery:oq,warning:pw,rows:[],totalRows:0,success:false,error:`${wh}「${sn}」無資料`} }];\nconst hdr=api.values[0]||[], raw=api.values.slice(1);\nfunction fc(h,a){for(const x of a){const i=h.findIndex(z=>z&&z.trim()===x);if(i!==-1)return i;}return -1;}\nfunction ns(v){if(!v||v.trim()==='')return{status:'',ok:true};const lv=v.trim().toLowerCase();for(const[k,m]of Object.entries(CONFIG.leaveStatusMapping))if(lv===k.toLowerCase())return{status:m,ok:true};return{status:v.trim(),ok:false};}\nlet rows=[];\nif(st==='work'){\n  const cm={}; for(const[f,a]of Object.entries(CONFIG.workFieldMapping))cm[f]=fc(hdr,a);\n  for(const r of raw){const g=f=>{const i=cm[f];return i>=0&&r[i]!==undefined?String(r[i]).trim():'';};\n    const si=ns(g('attendanceStatus')||g('leaveType'));\n    rows.push({date:g('date'),department:g('department'),shift:g('shift'),name:g('name'),workHours:g('workHours'),overtimeHours:g('overtimeHours'),attendanceStatus:si.status,leaveType:si.status,note:g('note'),warehouse:wh,...(!si.ok?{unresolvedStatus:true}:{})});}\n}else{\n  const dsc=CONFIG.leaveDateStartCol;\n  const ni=fc(hdr,['姓名','Name','員工姓名']),di=fc(hdr,['組別','部門','Department','組']),si=fc(hdr,['班別','Shift','班次']);\n  const dh=hdr.slice(dsc);\n  for(const r of raw){const pn=ni>=0?String(r[ni]||'').trim():'';const dp=di>=0?String(r[di]||'').trim():'';const sh=si>=0?String(r[si]||'').trim():'';\n    if(!pn)continue;\n    for(let i=0;i<dh.length;i++){const cv=r[dsc+i];if(cv===undefined||cv===null||String(cv).trim()==='')continue;const s=ns(String(cv));\n      rows.push({date:dh[i]?String(dh[i]).trim():'',department:dp,shift:sh,name:pn,workHours:'',overtimeHours:'',attendanceStatus:s.status,leaveType:s.status,note:'',warehouse:wh,...(!s.ok?{unresolvedStatus:true}:{})});}}\n}\nreturn [{json:{warehouse:wh,sheetType:st,sheetName:sn,allSheetNames:allSN,date,intent,leaveType:lt,needReport:nr,originalQuery:oq,warning:pw,rows,totalRows:rows.length,success:true}}];\n"
+      },
+      "id": "standardize-node",
+      "name": "資料標準化",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1740, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// 節點：合併所有倉別資料\n// ============================================================\nconst all=$input.all(), mr=[], wn=[], er=[];\nlet date='',intent='',lt='',nr=false,oq=''; const wl=[];\nfor(const it of all){const d=it.json;if(!date)date=d.date;if(!intent)intent=d.intent;if(!lt)lt=d.leaveType;if(!nr)nr=d.needReport;if(!oq)oq=d.originalQuery;\n  wl.push(d.warehouse);if(d.warning)wn.push(d.warning);if(!d.success){er.push(d.error||`${d.warehouse} 失敗`);continue;}if(d.rows?.length)mr.push(...d.rows);}\nreturn [{json:{date,intent,leaveType:lt,needReport:nr,originalQuery:oq,warehouses:wl,rows:mr,totalRows:mr.length,warnings:wn.length?wn:undefined,errors:er.length?er:undefined,success:er.length===0}}];\n"
+      },
+      "id": "merge-data-node",
+      "name": "合併所有倉別資料",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// 節點：查詢與統計（含人員明細）\n// ============================================================\nconst AV=['出勤','正常',''];\nconst d=$input.first().json;\nconst{date,intent,leaveType:lt,originalQuery:oq,rows,warehouses:wh,warnings,errors}=d;\nfunction md(rd,td){if(!rd||!td)return false;rd=String(rd).trim();td=String(td).trim();if(rd===td)return true;const p=td.split('-');if(p.length!==3)return false;const[tY,tM,tD]=p.map(Number);let m=rd.match(/^(\\d{1,2})[\\/-](\\d{1,2})$/);if(m)return+m[1]===tM&&+m[2]===tD;m=rd.match(/^(\\d{4})[\\/-](\\d{1,2})[\\/-](\\d{1,2})$/);if(m)return+m[1]===tY&&+m[2]===tM&&+m[3]===tD;return false;}\nfunction buildDetail(list) {\n  const grouped = {};\n  for (const r of list) {\n    const lt = r.leaveType || r.attendanceStatus || '未分類';\n    if (!grouped[lt]) grouped[lt] = [];\n    grouped[lt].push(r);\n  }\n  const lines = [];\n  for (const [type, people] of Object.entries(grouped)) {\n    lines.push(`\\n【${type}】${people.length} 人`);\n    for (const p of people) {\n      const parts = [p.warehouse, p.department, p.shift, p.name].filter(Boolean);\n      lines.push(`  ${parts.join(' / ')}`);\n    }\n  }\n  return lines.join('\\n');\n}\nconst df=rows.filter(r=>md(r.date,date));\nlet res={};\nswitch(intent){\ncase'leave_status':{const lr=df.filter(r=>{const s=r.attendanceStatus||r.leaveType||'';return s&&!AV.includes(s);});const fr=lt?lr.filter(r=>(r.leaveType||r.attendanceStatus)===lt):lr;\n  const detail=buildDetail(fr);\n  res={success:true,query:oq,intent,date,summaryText:`${date} 請假狀況：共 ${fr.length} 人`+(lt?`（${lt}）`:'')+`，倉別：${wh.join(', ')}\\n`+detail,detailText:detail,totals:{totalLeave:fr.length,byWarehouse:{},byLeaveType:{}},rows:fr};\n  for(const r of fr){res.totals.byWarehouse[r.warehouse]=(res.totals.byWarehouse[r.warehouse]||0)+1;const t=r.leaveType||'未分類';res.totals.byLeaveType[t]=(res.totals.byLeaveType[t]||0)+1;}break;}\ncase'sick_leave_stats':{const sr=df.filter(r=>(r.leaveType||r.attendanceStatus||'').trim()==='病假');\n  const detail=buildDetail(sr);\n  res={success:true,query:oq,intent,date,summaryText:`${date} 病假統計：共 ${sr.length} 人，倉別：${wh.join(', ')}\\n`+detail,detailText:detail,totals:{totalSickLeave:sr.length,byWarehouse:{}},rows:sr};\n  for(const r of sr)res.totals.byWarehouse[r.warehouse]=(res.totals.byWarehouse[r.warehouse]||0)+1;break;}\ncase'leave_stats':{const lr=df.filter(r=>{const s=r.attendanceStatus||r.leaveType||'';return s&&!AV.includes(s);});\n  const detail=buildDetail(lr);\n  res={success:true,query:oq,intent,date,summaryText:`${date} 請假統計：共 ${lr.length} 人，倉別：${wh.join(', ')}`,totals:{totalLeave:lr.length,byWarehouse:{},byLeaveType:{}},rows:lr};\n  for(const r of lr){res.totals.byWarehouse[r.warehouse]=(res.totals.byWarehouse[r.warehouse]||0)+1;const t=r.leaveType||'未分類';res.totals.byLeaveType[t]=(res.totals.byLeaveType[t]||0)+1;}break;}\ncase'attendance_detail':{res={success:true,query:oq,intent,date,summaryText:`${date} 出勤明細：共 ${df.length} 筆，倉別：${wh.join(', ')}`,totals:{totalRecords:df.length,byWarehouse:{},byDepartment:{},byShift:{}},rows:df};\n  for(const r of df){res.totals.byWarehouse[r.warehouse]=(res.totals.byWarehouse[r.warehouse]||0)+1;if(r.department)res.totals.byDepartment[r.department]=(res.totals.byDepartment[r.department]||0)+1;if(r.shift)res.totals.byShift[r.shift]=(res.totals.byShift[r.shift]||0)+1;}break;}\ncase'attendance_stats':{const tw=df.reduce((s,r)=>s+(parseFloat(r.workHours)||0),0),to=df.reduce((s,r)=>s+(parseFloat(r.overtimeHours)||0),0);\n  res={success:true,query:oq,intent,date,summaryText:`${date} 出勤統計：${df.length} 人，工時 ${tw.toFixed(1)}h，加班 ${to.toFixed(1)}h`,totals:{totalRecords:df.length,totalWorkHours:tw.toFixed(1),totalOvertimeHours:to.toFixed(1),byWarehouse:{}},rows:df};\n  for(const r of df){if(!res.totals.byWarehouse[r.warehouse])res.totals.byWarehouse[r.warehouse]={count:0,wh:0,ot:0};res.totals.byWarehouse[r.warehouse].count++;res.totals.byWarehouse[r.warehouse].wh+=parseFloat(r.workHours)||0;res.totals.byWarehouse[r.warehouse].ot+=parseFloat(r.overtimeHours)||0;}\n  for(const w of Object.keys(res.totals.byWarehouse)){res.totals.byWarehouse[w].wh=res.totals.byWarehouse[w].wh.toFixed(1);res.totals.byWarehouse[w].ot=res.totals.byWarehouse[w].ot.toFixed(1);}break;}\ndefault:res={success:false,query:oq,error:`無法識別意圖：${intent}`};}\nif(warnings?.length)res.warnings=warnings;if(errors?.length){res.errors=errors;if(res.rows?.length===0){res.success=false;res.summaryText='部分倉別讀取失敗';}}\nif(res.rows?.length===0&&res.success){res.success=false;res.summaryText=`${date} 查無資料（${wh.join(', ')}）`;}\nres.emailReady=true;res.emailSubject=`[出勤報表] ${date} ${intent}`;res.emailBody=res.summaryText||'';\nreturn [{json:res}];\n"
+      },
+      "id": "query-stats-node",
+      "name": "查詢與統計",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2180, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "application/json; charset=utf-8" }] } }
+      },
+      "id": "respond-success-node",
+      "name": "回傳成功結果",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2400, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 400, "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "application/json; charset=utf-8" }] } }
+      },
+      "id": "respond-error-node",
+      "name": "回傳錯誤結果",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [860, 450]
+    }
+  ],
+  "connections": {
+    "Webhook 接收查詢": { "main": [[{ "node": "指令解析", "type": "main", "index": 0 }]] },
+    "指令解析": { "main": [[{ "node": "解析成功？", "type": "main", "index": 0 }]] },
+    "解析成功？": { "main": [[{ "node": "組裝讀取參數", "type": "main", "index": 0 }], [{ "node": "回傳錯誤結果", "type": "main", "index": 0 }]] },
+    "組裝讀取參數": { "main": [[{ "node": "取得分頁列表", "type": "main", "index": 0 }]] },
+    "取得分頁列表": { "main": [[{ "node": "解析分頁並組裝URL", "type": "main", "index": 0 }]] },
+    "解析分頁並組裝URL": { "main": [[{ "node": "讀取分頁資料", "type": "main", "index": 0 }]] },
+    "讀取分頁資料": { "main": [[{ "node": "資料標準化", "type": "main", "index": 0 }]] },
+    "資料標準化": { "main": [[{ "node": "合併所有倉別資料", "type": "main", "index": 0 }]] },
+    "合併所有倉別資料": { "main": [[{ "node": "查詢與統計", "type": "main", "index": 0 }]] },
+    "查詢與統計": { "main": [[{ "node": "回傳成功結果", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-04-05T02:40:00.000Z",
+  "versionId": "4"
+}

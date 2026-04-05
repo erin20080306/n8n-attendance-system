@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多倉出勤/請假查詢與報表系統 - n8n Workflow 預覽</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            n8n: { primary: '#ff6d5a', dark: '#1a1a2e', card: '#16213e', accent: '#e94560' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
+    body { font-family: 'Noto Sans TC', 'Inter', sans-serif; }
+    .flow-line { position: relative; }
+    .flow-line::after {
+      content: ''; position: absolute; left: 50%; bottom: -24px;
+      width: 2px; height: 24px; background: #ff6d5a;
+    }
+    .flow-line::before {
+      content: '▼'; position: absolute; left: 50%; bottom: -36px;
+      transform: translateX(-50%); color: #ff6d5a; font-size: 12px;
+    }
+    .flow-branch::after { display: none; }
+    .flow-branch::before { display: none; }
+    pre { white-space: pre-wrap; word-wrap: break-word; }
+    .tab-active { border-color: #ff6d5a; color: #ff6d5a; background: rgba(255,109,90,0.08); }
+    .json-viewer { max-height: 500px; overflow-y: auto; }
+    .copy-btn:active { transform: scale(0.95); }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- 頂部導覽 -->
+  <nav class="bg-gray-900/80 backdrop-blur border-b border-gray-800 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-n8n-primary rounded-lg flex items-center justify-center font-bold text-white text-sm">n8n</div>
+        <h1 class="text-lg font-bold">多倉出勤/請假查詢與報表系統</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-xs font-medium">v1.0</span>
+        <span class="px-3 py-1 bg-n8n-primary/20 text-n8n-primary rounded-full text-xs font-medium">可匯入</span>
+        <a href="chat.html" class="px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-full text-xs font-medium hover:bg-indigo-500/30 transition-all">開啟查詢助手</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="max-w-7xl mx-auto px-4 py-8">
+
+    <!-- 總覽卡片 -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-10">
+      <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+        <div class="text-3xl font-bold text-n8n-primary">10</div>
+        <div class="text-gray-400 text-sm mt-1">工作節點</div>
+      </div>
+      <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+        <div class="text-3xl font-bold text-blue-400">7</div>
+        <div class="text-gray-400 text-sm mt-1">支援倉別</div>
+      </div>
+      <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+        <div class="text-3xl font-bold text-emerald-400">5</div>
+        <div class="text-gray-400 text-sm mt-1">查詢意圖</div>
+      </div>
+      <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+        <div class="text-3xl font-bold text-amber-400">8</div>
+        <div class="text-gray-400 text-sm mt-1">測試範例</div>
+      </div>
+    </div>
+
+    <!-- 分頁切換 -->
+    <div class="flex gap-1 mb-8 border-b border-gray-800 overflow-x-auto" id="tabs">
+      <button onclick="switchTab('flow')" data-tab="flow" class="tab-active px-5 py-3 text-sm font-medium border-b-2 border-transparent transition-all rounded-t-lg whitespace-nowrap">流程架構</button>
+      <button onclick="switchTab('nodes')" data-tab="nodes" class="px-5 py-3 text-sm font-medium border-b-2 border-transparent transition-all rounded-t-lg whitespace-nowrap hover:text-gray-300">節點說明</button>
+      <button onclick="switchTab('test')" data-tab="test" class="px-5 py-3 text-sm font-medium border-b-2 border-transparent transition-all rounded-t-lg whitespace-nowrap hover:text-gray-300">測試範例</button>
+      <button onclick="switchTab('config')" data-tab="config" class="px-5 py-3 text-sm font-medium border-b-2 border-transparent transition-all rounded-t-lg whitespace-nowrap hover:text-gray-300">Config 設定</button>
+      <button onclick="switchTab('json')" data-tab="json" class="px-5 py-3 text-sm font-medium border-b-2 border-transparent transition-all rounded-t-lg whitespace-nowrap hover:text-gray-300">Workflow JSON</button>
+      <button onclick="switchTab('guide')" data-tab="guide" class="px-5 py-3 text-sm font-medium border-b-2 border-transparent transition-all rounded-t-lg whitespace-nowrap hover:text-gray-300">匯入教學</button>
+    </div>
+
+    <!-- Tab: 流程架構 -->
+    <div id="tab-flow" class="tab-content">
+      <h2 class="text-xl font-bold mb-6">Workflow 流程架構圖</h2>
+      <div class="flex flex-col items-center gap-10">
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-green-400 rounded-full"></span>
+            <span class="font-bold text-green-400">Webhook 接收查詢</span>
+          </div>
+          <div class="text-gray-400 text-sm">POST /attendance-query<br>接收 { "query": "..." }</div>
+        </div>
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-yellow-400 rounded-full"></span>
+            <span class="font-bold text-yellow-400">指令解析</span>
+          </div>
+          <div class="text-gray-400 text-sm">解析日期、意圖、倉別、假別<br>規則式（不依賴 AI）</div>
+        </div>
+
+        <div class="flow-branch bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-purple-400 rounded-full"></span>
+            <span class="font-bold text-purple-400">解析成功？</span>
+          </div>
+          <div class="flex gap-4 mt-3 justify-center">
+            <div class="bg-green-500/10 border border-green-500/30 rounded-lg px-4 py-2 text-sm">
+              <span class="text-green-400 font-medium">✓ 是</span> → 繼續
+            </div>
+            <div class="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 text-sm">
+              <span class="text-red-400 font-medium">✗ 否</span> → 回傳錯誤
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 text-n8n-primary"><span>▼</span></div>
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-blue-400 rounded-full"></span>
+            <span class="font-bold text-blue-400">組裝讀取參數</span>
+          </div>
+          <div class="text-gray-400 text-sm">為每個倉別產生 spreadsheetId<br>決定讀取假況或工時分頁</div>
+        </div>
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-emerald-400 rounded-full"></span>
+            <span class="font-bold text-emerald-400">讀取 Google Sheets</span>
+          </div>
+          <div class="text-gray-400 text-sm">API v4 + OAuth2<br>自動找分頁 → 讀取資料</div>
+        </div>
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-teal-400 rounded-full"></span>
+            <span class="font-bold text-teal-400">資料標準化</span>
+          </div>
+          <div class="text-gray-400 text-sm">統一欄位格式 + 假況映射<br>工時 / 假況分頁分別處理</div>
+        </div>
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-cyan-400 rounded-full"></span>
+            <span class="font-bold text-cyan-400">合併所有倉別資料</span>
+          </div>
+          <div class="text-gray-400 text-sm">多倉資料合併<br>收集 warnings / errors</div>
+        </div>
+
+        <div class="flow-line bg-gray-900 rounded-xl p-5 border border-gray-800 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-orange-400 rounded-full"></span>
+            <span class="font-bold text-orange-400">查詢與統計</span>
+          </div>
+          <div class="text-gray-400 text-sm">日期過濾 + 意圖處理<br>產出 summaryText / totals / rows</div>
+        </div>
+
+        <div class="flow-branch bg-gray-900 rounded-xl p-5 border border-n8n-primary/50 w-full max-w-lg text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <span class="w-3 h-3 bg-n8n-primary rounded-full"></span>
+            <span class="font-bold text-n8n-primary">回傳結果</span>
+          </div>
+          <div class="text-gray-400 text-sm">HTTP 200 JSON 回傳<br>含 emailReady 預留欄位</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 節點說明 -->
+    <div id="tab-nodes" class="tab-content hidden">
+      <h2 class="text-xl font-bold mb-6">所有節點用途說明</h2>
+      <div class="space-y-4" id="nodes-list"></div>
+    </div>
+
+    <!-- Tab: 測試範例 -->
+    <div id="tab-test" class="tab-content hidden">
+      <h2 class="text-xl font-bold mb-6">Webhook 測試範例</h2>
+      <p class="text-gray-400 mb-4">點擊任一範例可複製完整 curl 指令</p>
+      <div class="space-y-3" id="test-list"></div>
+    </div>
+
+    <!-- Tab: Config -->
+    <div id="tab-config" class="tab-content hidden">
+      <h2 class="text-xl font-bold mb-6">集中 Config 設定說明</h2>
+      <div class="space-y-6">
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-amber-400 mb-3">倉別 Spreadsheet ID 對照表</h3>
+          <p class="text-gray-400 text-sm mb-3">位於「組裝讀取參數」節點 → CONFIG.spreadsheetMap</p>
+          <pre class="bg-gray-950 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto"><code>{
+  'TAO1':  '1_bhGQdx0YH7lsqPFEq5___6_Nwq_gbelJmIHv0bmaIE',
+  'TAO3':  '1cffI2jIVZA1uSiAyaLLXXgPzDByhy87xznaN85O7wEE',
+  'TAO4':  '1tVxQbV0298fn2OXWAF0UqZa7FLbypsatciatxs4YVTU',
+  'TAO5':  '1jzVXC6gt36hJtlUHoxtTzZLMNj4EtTsd4k8eNB1bdiA',
+  'TAO6':  '1wwPLSLjl2abfM_OMdTNI9PoiPKo3waCV_y0wmx2DxAE',
+  'TAO7':  '16nGCqRO8DYDm0PbXFbdt-fiEFZCXxXjlOWjKU67p4LY',
+  'TAO10': '1y0w49xdFlHvcVtgtG8fq6zdrF26y8j7HMFh5ujzUyR4',
+}</code></pre>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-blue-400 mb-3">分頁關鍵字</h3>
+          <p class="text-gray-400 text-sm mb-3">位於「組裝讀取參數」&「讀取 Google Sheets」節點 → CONFIG.sheetKeywords</p>
+          <pre class="bg-gray-950 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto"><code>{
+  leave: ['班表', '出勤記錄', '假況'],   // 假況/請假相關分頁
+  work:  ['出勤時數', '出勤時間', '工時'], // 工時/出勤明細分頁
+}</code></pre>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-emerald-400 mb-3">欄位映射表</h3>
+          <p class="text-gray-400 text-sm mb-3">位於「資料標準化」節點 → CONFIG.workFieldMapping</p>
+          <pre class="bg-gray-950 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto"><code>{
+  date:           ['日期', 'Date', 'date'],
+  department:     ['組別', '部門', 'Department', ...],
+  shift:          ['班別', 'Shift', ...],
+  name:           ['姓名', 'Name', ...],
+  workHours:      ['工作總時數', '工時', 'Hours', ...],
+  overtimeHours:  ['加班總時數', 'OvertimeHours', ...],
+  note:           ['備註', 'Note', ...],
+  attendanceStatus: ['出勤狀態', 'Status', ...],
+  leaveType:      ['假況', '請假', 'LeaveType', ...],
+}</code></pre>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-rose-400 mb-3">假況值映射</h3>
+          <p class="text-gray-400 text-sm mb-3">位於「資料標準化」節點 → CONFIG.leaveStatusMapping</p>
+          <pre class="bg-gray-950 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto"><code>{
+  '病假': '病假', '病': '病假', 'sick': '病假',
+  '事假': '事假', '事': '事假', 'personal leave': '事假',
+  '特休': '特休', '特': '特休', 'annual leave': '特休',
+  '曠職': '曠職', '曠': '曠職', 'absent': '曠職',
+  '出勤': '出勤', '正常': '出勤', 'present': '出勤',
+  '休假': '休假', '休': '休假',
+  '公假': '公假', '產假': '產假', '喪假': '喪假', '婚假': '婚假',
+}</code></pre>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-purple-400 mb-3">意圖識別關鍵字</h3>
+          <p class="text-gray-400 text-sm mb-3">位於「指令解析」節點 → CONFIG.intentKeywords</p>
+          <pre class="bg-gray-950 rounded-lg p-4 text-sm text-gray-300 overflow-x-auto"><code>[
+  { keywords: ['病假統計'],           intent: 'sick_leave_stats' },
+  { keywords: ['請假統計'],           intent: 'leave_stats' },
+  { keywords: ['請假狀況', '請假'],   intent: 'leave_status' },
+  { keywords: ['出勤人員', '出勤明細', '出勤報表'], intent: 'attendance_detail' },
+  { keywords: ['出勤統計'],           intent: 'attendance_stats' },
+]</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: JSON -->
+    <div id="tab-json" class="tab-content hidden">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-xl font-bold">Workflow JSON</h2>
+        <button onclick="copyJson()" class="copy-btn bg-n8n-primary hover:bg-n8n-primary/80 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all">
+          複製 JSON
+        </button>
+      </div>
+      <div class="json-viewer bg-gray-900 rounded-xl p-6 border border-gray-800">
+        <pre id="json-content" class="text-sm text-gray-300"></pre>
+      </div>
+    </div>
+
+    <!-- Tab: 匯入教學 -->
+    <div id="tab-guide" class="tab-content hidden">
+      <h2 class="text-xl font-bold mb-6">匯入 n8n 教學</h2>
+      <div class="space-y-6">
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-lg mb-4">Step 1：匯入 Workflow</h3>
+          <ol class="list-decimal list-inside space-y-2 text-gray-300">
+            <li>開啟 n8n Dashboard</li>
+            <li>左側選單點選 <strong>Workflows</strong></li>
+            <li>右上角點擊 <strong>⋮</strong> 選單 → <strong>Import from File</strong></li>
+            <li>選擇本專案的 <code class="bg-gray-800 px-2 py-0.5 rounded text-n8n-primary">workflow.json</code></li>
+            <li>確認匯入</li>
+          </ol>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-lg mb-4">Step 2：建立 Service Account</h3>
+          <ol class="list-decimal list-inside space-y-2 text-gray-300">
+            <li>在 <a href="https://console.cloud.google.com/" target="_blank" class="text-blue-400 underline">Google Cloud Console</a> 建立專案並啟用 <strong>Google Sheets API</strong></li>
+            <li>進入「<strong>IAM & Admin → Service Accounts</strong>」→ Create Service Account</li>
+            <li>輸入名稱（例如 <code class="bg-gray-800 px-2 py-0.5 rounded text-n8n-primary">n8n-sheets-reader</code>）→ Create → Done</li>
+            <li>點擊剛建立的 Service Account → <strong>Keys</strong> 分頁 → Add Key → JSON</li>
+            <li>下載 JSON 金鑰檔案，記下 Service Account Email</li>
+          </ol>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-lg mb-4">Step 3：共用 Sheet + 綁定 Credential</h3>
+          <ol class="list-decimal list-inside space-y-2 text-gray-300">
+            <li>打開 7 個倉的 Google Sheet → 「共用」→ 加入 Service Account Email 為「<strong>檢視者</strong>」</li>
+            <li>在 n8n → Settings → Credentials → Add → <strong>Google API (Service Account)</strong></li>
+            <li>填入 <strong>Service Account Email</strong> + <strong>Private Key</strong>（從 JSON 金鑰檔案複製）</li>
+            <li>Scopes 填入 <code class="bg-gray-800 px-2 py-0.5 rounded text-n8n-primary break-all">https://www.googleapis.com/auth/spreadsheets.readonly</code></li>
+            <li>匯入 Workflow 後，點擊「讀取 Google Sheets」節點，確認 Credential 已綁定</li>
+          </ol>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+          <h3 class="font-bold text-lg mb-4">Step 4：啟用與測試</h3>
+          <ol class="list-decimal list-inside space-y-2 text-gray-300">
+            <li>右上角切換 Workflow 為 <strong>Active</strong></li>
+            <li>使用下方 curl 指令測試：</li>
+          </ol>
+          <pre class="bg-gray-950 rounded-lg p-4 mt-3 text-sm text-gray-300 overflow-x-auto"><code>curl -X POST http://localhost:5678/webhook/attendance-query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "4/2請假狀況"}'</code></pre>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-6 border border-yellow-500/30">
+          <h3 class="font-bold text-lg mb-4 text-yellow-400">擴充 Email 報表</h3>
+          <ol class="list-decimal list-inside space-y-2 text-gray-300">
+            <li>在「回傳成功結果」前新增 <strong>IF</strong> 節點，判斷 <code class="bg-gray-800 px-2 py-0.5 rounded">needReport === true</code></li>
+            <li>新增 <strong>Send Email</strong> 或 <strong>Gmail</strong> 節點</li>
+            <li>使用 <code class="bg-gray-800 px-2 py-0.5 rounded">emailSubject</code> 作為主旨</li>
+            <li>使用 <code class="bg-gray-800 px-2 py-0.5 rounded">emailBody</code> + rows 格式化作為內文</li>
+            <li>如需 Excel 附件，新增 <strong>Spreadsheet File</strong> 節點轉為 xlsx</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部 -->
+  <footer class="border-t border-gray-800 mt-16 py-6 text-center text-gray-500 text-sm">
+    多倉出勤/請假查詢與報表系統 v1.0 &middot; n8n Workflow &middot; 2026
+  </footer>
+
+  <script>
+    // === 節點資料 ===
+    const nodes = [
+      { name: 'Webhook 接收查詢', type: 'Webhook', color: 'green', desc: '接收 POST /attendance-query 請求，body 含 query 欄位', detail: '回傳模式設為 Response Node，由後方節點控制 HTTP 回傳內容' },
+      { name: '指令解析', type: 'Code Node', color: 'yellow', desc: '規則式解析自然語言查詢', detail: '解析日期（4/2, 04/02, 2026/4/2, 2026-04-02）、意圖（5 種）、倉別（7 倉）、假別。無需 AI 即可運作。' },
+      { name: '解析成功？', type: 'IF Node', color: 'purple', desc: '判斷解析結果是否成功', detail: '成功 → 繼續流程；失敗（缺日期/空 query）→ 回傳 400 錯誤' },
+      { name: '組裝讀取參數', type: 'Code Node', color: 'blue', desc: '為每個倉別產生讀取參數', detail: '對應 spreadsheetId、根據意圖決定讀取假況或工時分頁。多倉查詢輸出多筆 item。' },
+      { name: '讀取 Google Sheets', type: 'Code Node + API', color: 'emerald', desc: '透過 Google Sheets API v4 讀取資料', detail: '先取得分頁列表 → 關鍵字匹配目標分頁 → 讀取全部資料。找不到分頁時退回第一個並附 warning。' },
+      { name: '資料標準化', type: 'Code Node', color: 'teal', desc: '將原始資料映射為統一格式', detail: '工時分頁：表頭映射。假況分頁：H 欄後展平為每人每日一列。所有 mapping 集中在 CONFIG。' },
+      { name: '合併所有倉別資料', type: 'Code Node', color: 'cyan', desc: '多倉資料合併為一份', detail: '收集所有 warnings/errors，合併 rows 陣列' },
+      { name: '查詢與統計', type: 'Code Node', color: 'orange', desc: '根據意圖執行查詢邏輯', detail: '支援 leave_status / sick_leave_stats / leave_stats / attendance_detail / attendance_stats 五種意圖，產出 summaryText + totals + rows' },
+      { name: '回傳成功結果', type: 'Respond to Webhook', color: 'red', desc: '回傳 HTTP 200 + JSON', detail: '含 emailReady / emailSubject / emailBody 預留欄位' },
+      { name: '回傳錯誤結果', type: 'Respond to Webhook', color: 'gray', desc: '回傳 HTTP 400 + JSON 錯誤', detail: '提供明確錯誤訊息與提示' },
+    ];
+
+    const colorMap = {
+      green: 'border-green-500/40 bg-green-500/5',
+      yellow: 'border-yellow-500/40 bg-yellow-500/5',
+      purple: 'border-purple-500/40 bg-purple-500/5',
+      blue: 'border-blue-500/40 bg-blue-500/5',
+      emerald: 'border-emerald-500/40 bg-emerald-500/5',
+      teal: 'border-teal-500/40 bg-teal-500/5',
+      cyan: 'border-cyan-500/40 bg-cyan-500/5',
+      orange: 'border-orange-500/40 bg-orange-500/5',
+      red: 'border-red-500/40 bg-red-500/5',
+      gray: 'border-gray-500/40 bg-gray-500/5',
+    };
+    const dotColorMap = {
+      green: 'bg-green-400', yellow: 'bg-yellow-400', purple: 'bg-purple-400',
+      blue: 'bg-blue-400', emerald: 'bg-emerald-400', teal: 'bg-teal-400',
+      cyan: 'bg-cyan-400', orange: 'bg-orange-400', red: 'bg-red-400', gray: 'bg-gray-400',
+    };
+
+    // 渲染節點列表
+    const nodesHtml = nodes.map((n, i) => `
+      <div class="rounded-xl p-5 border ${colorMap[n.color]}">
+        <div class="flex items-center gap-3 mb-2">
+          <span class="w-7 h-7 rounded-full ${dotColorMap[n.color]} flex items-center justify-center text-xs font-bold text-gray-900">${i + 1}</span>
+          <span class="font-bold text-white">${n.name}</span>
+          <span class="px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-400">${n.type}</span>
+        </div>
+        <p class="text-gray-300 text-sm mb-1">${n.desc}</p>
+        <p class="text-gray-500 text-xs">${n.detail}</p>
+      </div>
+    `).join('');
+    document.getElementById('nodes-list').innerHTML = nodesHtml;
+
+    // === 測試範例 ===
+    const tests = [
+      { label: '4/2 請假狀況', query: '4/2請假狀況' },
+      { label: '4/2 病假統計', query: '4/2病假統計' },
+      { label: '4/2 請假統計', query: '4/2請假統計' },
+      { label: '4/2 出勤人員明細', query: '4/2有出勤人員班別/部門/姓名/工時' },
+      { label: '查詢 TAO1 4/2 病假', query: '查詢TAO1 4/2病假' },
+      { label: '查詢 TAO3 4/2 出勤報表', query: '查詢TAO3 4/2出勤報表' },
+      { label: '全部倉別 4/2 請假統計', query: '查詢全部倉別 4/2 請假統計' },
+      { label: 'TAO10 2026/4/2 出勤明細', query: '查詢TAO10 2026/4/2 出勤人員明細' },
+    ];
+
+    const testHtml = tests.map(t => {
+      const curl = `curl -X POST http://localhost:5678/webhook/attendance-query \\\n  -H "Content-Type: application/json" \\\n  -d '{"query": "${t.query}"}'`;
+      return `
+        <div class="bg-gray-900 rounded-xl p-5 border border-gray-800 cursor-pointer hover:border-n8n-primary/50 transition-all" onclick="copyText(\`${curl.replace(/`/g, '\\`')}\`)">
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-medium text-white">${t.label}</span>
+            <span class="text-xs text-gray-500 hover:text-n8n-primary">點擊複製</span>
+          </div>
+          <pre class="text-sm text-gray-400 overflow-x-auto"><code>${curl}</code></pre>
+        </div>`;
+    }).join('');
+    document.getElementById('test-list').innerHTML = testHtml;
+
+    // === JSON 顯示 ===
+    let workflowJson = null;
+    fetch('workflow.json')
+      .then(r => r.json())
+      .then(j => {
+        workflowJson = j;
+        document.getElementById('json-content').textContent = JSON.stringify(j, null, 2);
+      })
+      .catch(() => {
+        document.getElementById('json-content').textContent = '無法載入 workflow.json';
+      });
+
+    // === Tab 切換 ===
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.getElementById('tab-' + tab).classList.remove('hidden');
+      document.querySelectorAll('#tabs button').forEach(btn => {
+        btn.classList.remove('tab-active');
+        if (btn.dataset.tab === tab) btn.classList.add('tab-active');
+      });
+    }
+
+    // === 複製功能 ===
+    function copyText(text) {
+      navigator.clipboard.writeText(text).then(() => showToast('已複製到剪貼簿'));
+    }
+    function copyJson() {
+      if (workflowJson) {
+        navigator.clipboard.writeText(JSON.stringify(workflowJson, null, 2)).then(() => showToast('Workflow JSON 已複製'));
+      }
+    }
+    function showToast(msg) {
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-6 right-6 bg-green-600 text-white px-5 py-3 rounded-lg shadow-xl text-sm font-medium z-50 transition-opacity';
+      toast.textContent = msg;
+      document.body.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2000);
+    }
+  </script>
+</body>
+</html>
