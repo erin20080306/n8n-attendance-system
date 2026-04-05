@@ -419,12 +419,24 @@ function generateLeaveCsv(rows) {
   return '\uFEFF' + csvRows.join('\n');
 }
 
+function sortDate(a, b) {
+  const pa = (a || '').match(/(\d+)\/(\d+)/), pb = (b || '').match(/(\d+)\/(\d+)/);
+  if (pa && pb) return (+pa[1]*100 + +pa[2]) - (+pb[1]*100 + +pb[2]);
+  return (a || '').localeCompare(b || '');
+}
+
 function generateWorkCsv(rows) {
   if (!rows || rows.length === 0) return '\uFEFF無資料';
-  const headers = ['日期', '倉別', '部門', '班別', '姓名', '上班時間', '下班時間', '工時', '加班時數', '備註'];
+  // 按姓名 → 倉別 → 日期排序，方便篩選
+  const sorted = [...rows].sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '') ||
+    (a.warehouse || '').localeCompare(b.warehouse || '') ||
+    sortDate(a.date, b.date)
+  );
+  const headers = ['姓名', '日期', '倉別', '部門', '班別', '上班時間', '下班時間', '工時', '加班時數', '備註'];
   const csvRows = [headers.map(csvEsc).join(',')];
-  for (const r of rows) {
-    const vals = [r.date, r.warehouse, r.department, r.shift, r.name,
+  for (const r of sorted) {
+    const vals = [r.name, r.date, r.warehouse, r.department, r.shift,
       r.clockIn || '', r.clockOut || '', r.workHours || '', r.overtimeHours || '', r.note || ''];
     csvRows.push(vals.map(csvEsc).join(','));
   }
