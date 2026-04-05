@@ -3,3 +3,4 @@ node_modules/
 *.local
 erp-glitch-reader-*.json
 .vercel/
+.vercel

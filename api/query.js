@@ -135,7 +135,27 @@ function parseQuery(query) {
 
   if (leaveType && ['leave_status','attendance_detail'].includes(intent)) intent = 'leave_stats';
 
-  return { ...dateInfo, intent, warehouses, leaveType, originalQuery: query };
+  // Person name extraction: remove known tokens, remaining Chinese chars = name
+  let personName = '';
+  let tmp = query;
+  // Remove date patterns
+  tmp = tmp.replace(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}/g, '');
+  tmp = tmp.replace(/\d{1,2}[\/-]\d{1,2}/g, '');
+  tmp = tmp.replace(/\d{1,2}\s*月/g, '');
+  tmp = tmp.replace(/[~\-到至]/g, '');
+  // Remove warehouse names
+  for (const w of ALL_WAREHOUSES) tmp = tmp.replace(new RegExp(w, 'gi'), '');
+  // Remove known keywords
+  const removeKw = ['全部倉','所有倉','全倉','病假統計','特休統計','請假統計','請假狀況','請假',
+    '出勤時數','出勤時間','工時查詢','打卡','出勤人員','出勤明細','出勤報表','出勤統計',
+    '病假','事假','特休','曠職','公假','國定假日','國假',
+    '假別統計','統計','查詢','的','全部'];
+  for (const kw of removeKw) tmp = tmp.replace(new RegExp(kw, 'g'), '');
+  tmp = tmp.replace(/[a-zA-Z0-9\s]/g, '').trim();
+  // Remaining Chinese characters (2-4 chars) = person name
+  if (tmp.length >= 2 && tmp.length <= 4) personName = tmp;
+
+  return { ...dateInfo, intent, warehouses, leaveType, personName, originalQuery: query };
 }
 
 // --- Sheet Processing ---
@@ -292,6 +312,11 @@ function computeStats(parsed, allRows, wh) {
   const showDate = dateMode !== 'day';
 
   let df = dateMode === 'month' ? allRows : allRows.filter(r => matchDate(r.date, parsed));
+
+  // Person name filter
+  const pn = parsed.personName || '';
+  if (pn) df = df.filter(r => r.name && r.name.includes(pn));
+
   let res = {};
 
   switch (intent) {
@@ -302,8 +327,9 @@ function computeStats(parsed, allRows, wh) {
       const detail = buildDetail(fr, showDate);
       const label = lt ? lt + '統計' : '請假統計';
       const uniq = new Set(fr.map(r => r.warehouse + '|' + r.name));
+      const nameTag = pn ? ` 【${pn}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
-        summaryText: `${dateLabel} ${label}：共 ${uniq.size} 人（${fr.length} 人次），倉別：${wh.join(', ')}\n${detail}`,
+        summaryText: `${dateLabel} ${label}${nameTag}：共 ${uniq.size} 人（${fr.length} 人次），倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalPeople: uniq.size, totalEntries: fr.length, byWarehouse: {}, byLeaveType: {} }, rows: fr };
       for (const r of fr) { res.totals.byWarehouse[r.warehouse] = (res.totals.byWarehouse[r.warehouse] || 0) + 1; res.totals.byLeaveType[r.leaveType || '未分類'] = (res.totals.byLeaveType[r.leaveType || '未分類'] || 0) + 1; }
       break;
@@ -312,16 +338,18 @@ function computeStats(parsed, allRows, wh) {
       const sr = df.filter(r => (r.leaveType || r.attendanceStatus || '').trim() === '病假');
       const detail = buildDetail(sr, showDate);
       const uniq = new Set(sr.map(r => r.warehouse + '|' + r.name));
+      const nameTag = pn ? ` 【${pn}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
-        summaryText: `${dateLabel} 病假統計：共 ${uniq.size} 人（${sr.length} 人次），倉別：${wh.join(', ')}\n${detail}`,
+        summaryText: `${dateLabel} 病假統計${nameTag}：共 ${uniq.size} 人（${sr.length} 人次），倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalPeople: uniq.size, totalEntries: sr.length, byWarehouse: {} }, rows: sr };
       for (const r of sr) res.totals.byWarehouse[r.warehouse] = (res.totals.byWarehouse[r.warehouse] || 0) + 1;
       break;
     }
     case 'attendance_detail': {
       const detail = buildDetail(df, showDate);
+      const nameTag = pn ? ` 【${pn}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
-        summaryText: `${dateLabel} 出勤明細：共 ${df.length} 筆，倉別：${wh.join(', ')}\n${detail}`,
+        summaryText: `${dateLabel} 出勤明細${nameTag}：共 ${df.length} 筆，倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalRecords: df.length, byWarehouse: {} }, rows: df };
       for (const r of df) res.totals.byWarehouse[r.warehouse] = (res.totals.byWarehouse[r.warehouse] || 0) + 1;
       break;
@@ -330,8 +358,9 @@ function computeStats(parsed, allRows, wh) {
       const detail = buildWorkDetail(df);
       const tw = df.reduce((s, r) => s + (parseFloat(r.workHours) || 0), 0);
       const to = df.reduce((s, r) => s + (parseFloat(r.overtimeHours) || 0), 0);
+      const nameTag = pn ? ` 【${pn}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
-        summaryText: `${dateLabel} 出勤時數：${df.length} 人，工時 ${tw.toFixed(1)}h，加班 ${to.toFixed(1)}h，倉別：${wh.join(', ')}\n${detail}`,
+        summaryText: `${dateLabel} 出勤時數${nameTag}：${df.length} 人，工時 ${tw.toFixed(1)}h，加班 ${to.toFixed(1)}h，倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalRecords: df.length, totalWorkHours: tw.toFixed(1), totalOvertimeHours: to.toFixed(1), byWarehouse: {} }, rows: df };
       for (const r of df) {
         if (!res.totals.byWarehouse[r.warehouse]) res.totals.byWarehouse[r.warehouse] = { count: 0, wh: 0, ot: 0 };
