@@ -108,7 +108,7 @@ function parseQuery(query) {
   else if ((m = query.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/))) { dateInfo = { date: `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`, dateMode: 'day' }; }
   else if ((m = query.match(/(\d{1,2})[\/\-](\d{1,2})/))) { dateInfo = { date: `${yr}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`, dateMode: 'day' }; }
   else if ((m = query.match(/(\d{1,2})\s*月/))) { dateInfo = { date: `${yr}-${String(m[1]).padStart(2,'0')}`, dateMode: 'month' }; }
-  else { dateInfo = { date: `${yr}-${String(now.getMonth()+1).padStart(2,'0')}`, dateMode: 'month' }; }
+  else { dateInfo = { dateMode: 'all' }; }
 
   // Intent
   const intentRules = [
@@ -314,12 +314,13 @@ function buildWorkDetail(list) {
 function computeStats(parsed, allRows, wh) {
   const { intent, leaveType: lt, originalQuery: oq, dateMode, date, dateFrom, dateTo } = parsed;
   let dateLabel;
-  if (dateMode === 'range') dateLabel = `${dateFrom} ~ ${dateTo}`;
+  if (dateMode === 'all') dateLabel = '全部月份';
+  else if (dateMode === 'range') dateLabel = `${dateFrom} ~ ${dateTo}`;
   else if (dateMode === 'month') dateLabel = (date || '').replace(/^(\d{4})-0?(\d{1,2})$/, '$1年$2月');
   else dateLabel = date || '';
   const showDate = dateMode !== 'day';
 
-  let df = dateMode === 'month' ? allRows : allRows.filter(r => matchDate(r.date, parsed));
+  let df = (dateMode === 'month' || dateMode === 'all') ? allRows : allRows.filter(r => matchDate(r.date, parsed));
 
   // Person name filter (supports multiple names)
   const pns = parsed.personNames || [];
@@ -444,7 +445,9 @@ async function sendEmail(subject, summaryText, rows, intent, emails) {
     host: 'smtp.gmail.com', port: 587, secure: false,
     auth: { user: SMTP_USER, pass: smtpPass },
   });
-  const csv = generateCsv(rows, intent);
+  // 按倉別排序後產生單一 CSV
+  const sorted = [...rows].sort((a, b) => (a.warehouse || '').localeCompare(b.warehouse || ''));
+  const csv = generateCsv(sorted, intent);
   const filename = `${subject.replace(/[^\w\u4e00-\u9fff-]/g, '_')}.csv`;
   try {
     await transporter.sendMail({
@@ -482,7 +485,7 @@ module.exports = async function handler(req, res) {
       const mF = parseInt((parsed.dateFrom || '').split('-')[1]) || 0;
       const mT = parseInt((parsed.dateTo || '').split('-')[1]) || 0;
       for (let m = mF; m <= mT; m++) months.push(m);
-    } else {
+    } else if (parsed.dateMode !== 'all') {
       const m = parseInt((parsed.date || '').split('-')[1]) || 0;
       if (m) months.push(m);
     }
@@ -501,15 +504,23 @@ module.exports = async function handler(req, res) {
       if (metaRes.status !== 200 || !metaRes.data.sheets) { warnings.push(`${wh} 無法取得分頁`); continue; }
       const names = metaRes.data.sheets.map(s => s.properties.title);
 
-      // Find target sheets for each month
+      // Find target sheets
       const targets = new Set();
-      for (const mo of months) {
-        const monthStr = mo + '月';
-        let target = null;
-        for (const k of kw) { const f = names.find(n => n.includes(k) && n.includes(monthStr)); if (f) { target = f; break; } }
-        if (!target) { for (const k of kw) { const f = names.find(n => n.includes(k)); if (f) { target = f; break; } } }
-        if (!target) target = names[0] || 'Sheet1';
-        targets.add(target);
+      if (parsed.dateMode === 'all') {
+        // 查詢所有符合關鍵字的分頁（各月份）
+        for (const name of names) {
+          for (const k of kw) { if (name.includes(k)) { targets.add(name); break; } }
+        }
+        if (targets.size === 0) targets.add(names[0] || 'Sheet1');
+      } else {
+        for (const mo of months) {
+          const monthStr = mo + '月';
+          let target = null;
+          for (const k of kw) { const f = names.find(n => n.includes(k) && n.includes(monthStr)); if (f) { target = f; break; } }
+          if (!target) { for (const k of kw) { const f = names.find(n => n.includes(k)); if (f) { target = f; break; } } }
+          if (!target) target = names[0] || 'Sheet1';
+          targets.add(target);
+        }
       }
 
       // Fetch and process each sheet
