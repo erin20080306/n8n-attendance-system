@@ -37,6 +37,8 @@ const EMAIL_CONFIG = {
 };
 
 const sa = require(SA_KEY_PATH);
+// 讓 api/query.js 也能讀到 SA key（它從 env 讀取）
+if (!process.env.GOOGLE_SA_KEY) process.env.GOOGLE_SA_KEY = JSON.stringify(sa);
 
 // --- Token 快取 ---
 let cachedToken = null;
@@ -96,33 +98,30 @@ function callSheetsApi(path, token) {
 // --- CSV 產生 ---
 function esc(v) { return '"' + String(v || '').replace(/"/g, '""') + '"'; }
 
-// 假別報表：同人合併一列，日期橫向展開
+// 假別報表：按人+假別分組，每組日期橫向排列
 function generateLeaveCsv(rows) {
   if (!rows || rows.length === 0) return '\uFEFF無資料';
-  // 收集所有日期並排序
-  const allDates = [...new Set(rows.map(r => r.date).filter(Boolean))];
-  allDates.sort((a, b) => {
+  const groups = {};
+  for (const r of rows) {
+    const lt = r.leaveType || r.attendanceStatus || '其他';
+    const key = [r.warehouse, r.department, r.shift, r.name, lt].join('|');
+    if (!groups[key]) groups[key] = { info: r, leaveType: lt, dates: [] };
+    if (r.date) groups[key].dates.push(r.date);
+  }
+  const sortDates = (arr) => arr.sort((a, b) => {
     const pa = a.match(/(\d+)\/(\d+)/), pb = b.match(/(\d+)\/(\d+)/);
     if (pa && pb) return (+pa[1]*100 + +pa[2]) - (+pb[1]*100 + +pb[2]);
     return a.localeCompare(b);
   });
-  // 按人分組
-  const people = {};
-  for (const r of rows) {
-    const key = [r.warehouse, r.department, r.shift, r.name].join('|');
-    if (!people[key]) people[key] = { info: r, dates: {} };
-    if (r.date) people[key].dates[r.date] = r.leaveType || r.attendanceStatus || 'V';
-  }
-  const headers = ['倉別', '部門', '班別', '姓名', '假別', '天數', ...allDates];
+  let maxDates = 0;
+  for (const g of Object.values(groups)) { sortDates(g.dates); if (g.dates.length > maxDates) maxDates = g.dates.length; }
+  const dateHeaders = Array.from({ length: maxDates }, (_, i) => `日期${i + 1}`);
+  const headers = ['倉別', '部門', '班別', '姓名', '假別', '天數', ...dateHeaders];
   const csvRows = [headers.map(esc).join(',')];
-  for (const [, data] of Object.entries(people)) {
-    const p = data.info;
-    const leaveType = p.leaveType || p.attendanceStatus || '';
-    const count = Object.keys(data.dates).length;
-    const vals = [p.warehouse, p.department, p.shift, p.name, leaveType, count];
-    for (const d of allDates) {
-      vals.push(data.dates[d] || '');
-    }
+  for (const [, g] of Object.entries(groups)) {
+    const p = g.info;
+    const vals = [p.warehouse, p.department, p.shift, p.name, g.leaveType, g.dates.length];
+    for (let i = 0; i < maxDates; i++) vals.push(g.dates[i] || '');
     csvRows.push(vals.map(esc).join(','));
   }
   return '\uFEFF' + csvRows.join('\n');
@@ -218,6 +217,23 @@ const server = http.createServer(async (req, res) => {
       const result = await callSheetsApi(`/v4/spreadsheets/${sid}/values/${encodeURIComponent(sn)}?majorDimension=ROWS`, token);
       res.writeHead(result.status); res.end(JSON.stringify(result.data));
     } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
+    return;
+  }
+
+  // POST /api/query — 查詢（與 Vercel 同邏輯）
+  if (parsed.pathname === '/api/query' && req.method === 'POST') {
+    const body = await readBody(req);
+    const queryHandler = require('./api/query');
+    // 建立與 Vercel 相容的 req/res 介面
+    const fakeReq = { method: 'POST', body };
+    const fakeRes = {
+      _status: 200, _headers: {},
+      setHeader(k, v) { this._headers[k] = v; },
+      status(code) { this._status = code; return this; },
+      json(data) { res.writeHead(this._status); res.end(JSON.stringify(data)); },
+      end() { res.writeHead(this._status); res.end(); },
+    };
+    try { await queryHandler(fakeReq, fakeRes); } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); }
     return;
   }
 

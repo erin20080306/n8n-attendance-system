@@ -1,7 +1,11 @@
 const https = require('https');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 // --- Config ---
+const SMTP_USER = 'erin20080306@gmail.com';
+const SMTP_FROM = '出勤查詢助手 <erin20080306@gmail.com>';
+const DEFAULT_EMAIL = 'erin20080306@gmail.com';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 const SPREADSHEET_MAP = {
   'TAO1':'1_bhGQdx0YH7lsqPFEq5___6_Nwq_gbelJmIHv0bmaIE',
@@ -135,8 +139,8 @@ function parseQuery(query) {
 
   if (leaveType && ['leave_status','attendance_detail'].includes(intent)) intent = 'leave_stats';
 
-  // Person name extraction: remove known tokens, remaining Chinese chars = name
-  let personName = '';
+  // Person name extraction: remove known tokens, remaining Chinese chars = name(s)
+  let personNames = [];
   let tmp = query;
   // Remove date patterns
   tmp = tmp.replace(/\d{4}[\/-]\d{1,2}[\/-]\d{1,2}/g, '');
@@ -152,10 +156,14 @@ function parseQuery(query) {
     '假別統計','統計','查詢','的','全部'];
   for (const kw of removeKw) tmp = tmp.replace(new RegExp(kw, 'g'), '');
   tmp = tmp.replace(/[a-zA-Z0-9\s]/g, '').trim();
-  // Remaining Chinese characters (2-4 chars) = person name
-  if (tmp.length >= 2 && tmp.length <= 4) personName = tmp;
+  // Split by 、,， and filter valid names (2-4 chars)
+  if (tmp.length >= 2) {
+    const parts = tmp.split(/[、,，]/).map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 4);
+    if (parts.length > 0) personNames = parts;
+    else if (tmp.length >= 2 && tmp.length <= 4) personNames = [tmp];
+  }
 
-  return { ...dateInfo, intent, warehouses, leaveType, personName, originalQuery: query };
+  return { ...dateInfo, intent, warehouses, leaveType, personNames, originalQuery: query };
 }
 
 // --- Sheet Processing ---
@@ -313,9 +321,9 @@ function computeStats(parsed, allRows, wh) {
 
   let df = dateMode === 'month' ? allRows : allRows.filter(r => matchDate(r.date, parsed));
 
-  // Person name filter
-  const pn = parsed.personName || '';
-  if (pn) df = df.filter(r => r.name && r.name.includes(pn));
+  // Person name filter (supports multiple names)
+  const pns = parsed.personNames || [];
+  if (pns.length > 0) df = df.filter(r => r.name && pns.some(pn => r.name.includes(pn)));
 
   let res = {};
 
@@ -327,7 +335,7 @@ function computeStats(parsed, allRows, wh) {
       const detail = buildDetail(fr, showDate);
       const label = lt ? lt + '統計' : '請假統計';
       const uniq = new Set(fr.map(r => r.warehouse + '|' + r.name));
-      const nameTag = pn ? ` 【${pn}】` : '';
+      const nameTag = pns.length ? ` 【${pns.join('、')}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
         summaryText: `${dateLabel} ${label}${nameTag}：共 ${uniq.size} 人（${fr.length} 人次），倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalPeople: uniq.size, totalEntries: fr.length, byWarehouse: {}, byLeaveType: {} }, rows: fr };
@@ -338,7 +346,7 @@ function computeStats(parsed, allRows, wh) {
       const sr = df.filter(r => (r.leaveType || r.attendanceStatus || '').trim() === '病假');
       const detail = buildDetail(sr, showDate);
       const uniq = new Set(sr.map(r => r.warehouse + '|' + r.name));
-      const nameTag = pn ? ` 【${pn}】` : '';
+      const nameTag = pns.length ? ` 【${pns.join('、')}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
         summaryText: `${dateLabel} 病假統計${nameTag}：共 ${uniq.size} 人（${sr.length} 人次），倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalPeople: uniq.size, totalEntries: sr.length, byWarehouse: {} }, rows: sr };
@@ -347,7 +355,7 @@ function computeStats(parsed, allRows, wh) {
     }
     case 'attendance_detail': {
       const detail = buildDetail(df, showDate);
-      const nameTag = pn ? ` 【${pn}】` : '';
+      const nameTag = pns.length ? ` 【${pns.join('、')}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
         summaryText: `${dateLabel} 出勤明細${nameTag}：共 ${df.length} 筆，倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalRecords: df.length, byWarehouse: {} }, rows: df };
@@ -358,7 +366,7 @@ function computeStats(parsed, allRows, wh) {
       const detail = buildWorkDetail(df);
       const tw = df.reduce((s, r) => s + (parseFloat(r.workHours) || 0), 0);
       const to = df.reduce((s, r) => s + (parseFloat(r.overtimeHours) || 0), 0);
-      const nameTag = pn ? ` 【${pn}】` : '';
+      const nameTag = pns.length ? ` 【${pns.join('、')}】` : '';
       res = { success: true, query: oq, intent, date, dateFrom, dateTo, dateMode,
         summaryText: `${dateLabel} 出勤時數${nameTag}：${df.length} 人，工時 ${tw.toFixed(1)}h，加班 ${to.toFixed(1)}h，倉別：${wh.join(', ')}\n${detail}`,
         totals: { totalRecords: df.length, totalWorkHours: tw.toFixed(1), totalOvertimeHours: to.toFixed(1), byWarehouse: {} }, rows: df };
@@ -372,7 +380,83 @@ function computeStats(parsed, allRows, wh) {
   }
   if (res.rows?.length === 0 && res.success) { res.success = false; res.summaryText = `${dateLabel} 查無資料（${wh.join(', ')}）`; }
   res.emailSubject = `[出勤報表] ${dateLabel} ${lt || intent} - ${wh.join(', ')}`;
+  res.intent = intent;
   return res;
+}
+
+// --- CSV Generation ---
+function csvEsc(v) { return '"' + String(v || '').replace(/"/g, '""') + '"'; }
+
+function generateLeaveCsv(rows) {
+  if (!rows || rows.length === 0) return '\uFEFF無資料';
+  // 按 人+假別 分組，每組列出日期
+  const groups = {};
+  for (const r of rows) {
+    const lt = r.leaveType || r.attendanceStatus || '其他';
+    const key = [r.warehouse, r.department, r.shift, r.name, lt].join('|');
+    if (!groups[key]) groups[key] = { info: r, leaveType: lt, dates: [] };
+    if (r.date) groups[key].dates.push(r.date);
+  }
+  // 排序日期
+  const sortDates = (arr) => arr.sort((a, b) => {
+    const pa = a.match(/(\d+)\/(\d+)/), pb = b.match(/(\d+)\/(\d+)/);
+    if (pa && pb) return (+pa[1]*100 + +pa[2]) - (+pb[1]*100 + +pb[2]);
+    return a.localeCompare(b);
+  });
+  // 找出最大日期數量（決定欄位數）
+  let maxDates = 0;
+  for (const g of Object.values(groups)) { sortDates(g.dates); if (g.dates.length > maxDates) maxDates = g.dates.length; }
+  const dateHeaders = Array.from({ length: maxDates }, (_, i) => `日期${i + 1}`);
+  const headers = ['倉別', '部門', '班別', '姓名', '假別', '天數', ...dateHeaders];
+  const csvRows = [headers.map(csvEsc).join(',')];
+  for (const [, g] of Object.entries(groups)) {
+    const p = g.info;
+    const vals = [p.warehouse, p.department, p.shift, p.name, g.leaveType, g.dates.length];
+    for (let i = 0; i < maxDates; i++) vals.push(g.dates[i] || '');
+    csvRows.push(vals.map(csvEsc).join(','));
+  }
+  return '\uFEFF' + csvRows.join('\n');
+}
+
+function generateWorkCsv(rows) {
+  if (!rows || rows.length === 0) return '\uFEFF無資料';
+  const headers = ['日期', '倉別', '部門', '班別', '姓名', '上班時間', '下班時間', '工時', '加班時數', '備註'];
+  const csvRows = [headers.map(csvEsc).join(',')];
+  for (const r of rows) {
+    const vals = [r.date, r.warehouse, r.department, r.shift, r.name,
+      r.clockIn || '', r.clockOut || '', r.workHours || '', r.overtimeHours || '', r.note || ''];
+    csvRows.push(vals.map(csvEsc).join(','));
+  }
+  return '\uFEFF' + csvRows.join('\n');
+}
+
+function generateCsv(rows, intent) {
+  if (intent === 'attendance_stats' || intent === 'attendance_detail') return generateWorkCsv(rows);
+  return generateLeaveCsv(rows);
+}
+
+// --- Email Sending ---
+async function sendEmail(subject, summaryText, rows, intent, emails) {
+  const smtpPass = process.env.GMAIL_APP_PASSWORD;
+  if (!smtpPass) return { success: false, error: '未設定 GMAIL_APP_PASSWORD' };
+  const toList = [...new Set([...(emails || []), DEFAULT_EMAIL].filter(Boolean))];
+  const transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com', port: 587, secure: false,
+    auth: { user: SMTP_USER, pass: smtpPass },
+  });
+  const csv = generateCsv(rows, intent);
+  const filename = `${subject.replace(/[^\w\u4e00-\u9fff-]/g, '_')}.csv`;
+  try {
+    await transporter.sendMail({
+      from: SMTP_FROM, to: toList.join(','),
+      subject, text: summaryText,
+      html: `<pre style="font-family:monospace;font-size:14px;white-space:pre-wrap;">${summaryText}</pre>`,
+      attachments: [{ filename, content: csv, contentType: 'text/csv; charset=utf-8' }],
+    });
+    return { success: true, message: `已寄送至 ${toList.join(', ')}` };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 }
 
 // --- Main Handler ---
@@ -384,7 +468,7 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
   try {
-    const { query } = req.body || {};
+    const { query, emails } = req.body || {};
     if (!query || !query.trim()) return res.status(400).json({ success: false, error: '請提供查詢指令', hint: '範例：4/2請假狀況、3月特休統計、3/15~4/1特休' });
 
     const parsed = parseQuery(query.trim());
@@ -441,6 +525,23 @@ module.exports = async function handler(req, res) {
 
     const result = computeStats(parsed, allRows, parsed.warehouses);
     if (warnings.length) result.warnings = warnings;
+
+    // Auto-send email report
+    if (result.success && result.rows && result.rows.length > 0) {
+      try {
+        const emailResult = await sendEmail(
+          result.emailSubject || '[出勤報表]',
+          result.summaryText || '',
+          result.rows,
+          result.intent || parsed.intent,
+          emails || []
+        );
+        result.email = emailResult;
+      } catch (e) {
+        result.email = { success: false, error: e.message };
+      }
+    }
+
     return res.status(200).json(result);
 
   } catch (e) {
